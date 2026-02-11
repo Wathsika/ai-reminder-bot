@@ -1,61 +1,68 @@
 import os
 from google import genai
-from app.database import SessionLocal, Reminder, Timetable 
-from datetime import datetime, timedelta
+from app.database import SessionLocal, Reminder, Timetable
+from datetime import datetime
+import pytz
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-# --- TOOLS FOR GEMINI ---
+# --- TOOLS GEMINI CAN USE ---
 
 def add_reminder(user_id: str, task: str, time_str: str):
-    """Adds a new reminder. time_str format: 'YYYY-MM-DD HH:MM'"""
+    """Adds a reminder. time_str format: 'YYYY-MM-DD HH:MM'"""
     db = SessionLocal()
-    new_task = Reminder(
-        user_id=user_id, 
-        task=task, 
-        remind_at=datetime.strptime(time_str, "%Y-%m-%d %H:%M")
-    )
-    db.add(new_task)
-    db.commit()
-    db.close()
-    return f"✅ Set reminder: {task} for {time_str}"
+    try:
+        dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M")
+        new_task = Reminder(user_id=user_id, task=task, remind_at=dt)
+        db.add(new_task)
+        db.commit()
+        return f"✅ OK! I'll remind you to '{task}' at {time_str}."
+    except Exception as e:
+        return f"❌ Error saving reminder: {e}"
+    finally:
+        db.close()
 
 def add_timetable(user_id: str, day: str, subject: str, time: str):
-    """Saves a recurring campus timetable entry."""
+    """Saves a campus timetable entry."""
     db = SessionLocal()
     entry = Timetable(user_id=user_id, day=day, subject=subject, time=time)
     db.add(entry)
     db.commit()
     db.close()
-    return f"📚 Saved to timetable: {subject} on {day} at {time}"
+    return f"📚 Saved: {subject} on {day} at {time}."
 
 def complete_task(user_id: str, task_name: str):
-    """Marks a task as finished and deletes it."""
+    """Clears a task when finished."""
     db = SessionLocal()
-    task = db.query(Reminder).filter(
-        Reminder.user_id == user_id, 
-        Reminder.task.ilike(f"%{task_name}%")
-    ).first()
+    task = db.query(Reminder).filter(Reminder.user_id == user_id, Reminder.task.ilike(f"%{task_name}%")).first()
     if task:
         db.delete(task)
         db.commit()
         db.close()
-        return f"🎉 Great! I've cleared '{task_name}' from your list."
-    return "❌ I couldn't find that task in your list."
+        return f"🎉 Task '{task_name}' completed and removed!"
+    db.close()
+    return f"❌ Couldn't find task '{task_name}'."
 
-# --- AGENT CONFIG ---
-
-tools = [add_reminder, add_timetable, complete_task]
-model_id = "gemini-2.5-flash" # Can be updated via chat command later
+# --- LOGIC ---
 
 def get_ai_response(user_input: str, user_id: str):
-    # We include the current time so Gemini knows what "4 PM" means today
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M, %A")
-    prompt = f"System Time: {current_time}. User ID: {user_id}. {user_input}"
+    # Set your timezone!
+    tz = pytz.timezone('Asia/Colombo')
+    now = datetime.now(tz).strftime("%Y-%m-%d %H:%M, %A")
     
+    # System Instructions for the Agent
+    sys_msg = (
+        f"Current Time: {now}. You are a proactive assistant. "
+        "Use tools to manage reminders and timetables. "
+        "When asked to remind, use 'add_reminder'. When a task is done, use 'complete_task'."
+    )
+
     response = client.models.generate_content(
-        model=model_id,
-        contents=prompt,
-        config={'tools': tools} # Enable automatic tool calling
+        model="gemini-2.5-flash",
+        contents=user_input,
+        config={
+            "system_instruction": sys_msg,
+            "tools": [add_reminder, add_timetable, complete_task]
+        }
     )
     return response.text
