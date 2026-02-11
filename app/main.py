@@ -1,58 +1,51 @@
 import os
 import discord
-from discord.ext import commands
-from google import genai  # <--- New import style
+from discord.ext import commands, tasks
+from app.ai_logic import get_ai_response
+from app.database import SessionLocal, Reminder 
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-# 1. Load environment variables
 load_dotenv()
-TOKEN = os.getenv('DISCORD_TOKEN')
-GEMINI_KEY = os.getenv('GEMINI_API_KEY')
-ADMIN_ID = os.getenv('ADMIN_ID')
-
-# 2. Setup Gemini AI (New way for google-genai)
-client = genai.Client(api_key=GEMINI_KEY)
-
-# 3. Setup Discord Bot
 intents = discord.Intents.default()
-intents.message_content = True 
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+# --- THE NAGGING LOOP ---
+# This runs every 1 minute in the background
+@tasks.loop(minutes=1)
+async def check_reminders():
+    db = SessionLocal()
+    now = datetime.now()
+    # Find reminders that are due and NOT completed
+    due_tasks = db.query(Reminder).filter(Reminder.remind_at <= now).all()
+    
+    for r in due_tasks:
+        user = await bot.fetch_user(int(r.user_id))
+        if user:
+            if r.status == "PENDING":
+                await user.send(f"🔔 REMINDER: {r.task}!")
+                r.status = "NAGGING"
+                r.remind_at = now + timedelta(minutes=20) # Nag in 20 mins
+            else:
+                await user.send(f"❓ Did you finish this yet?: {r.task}")
+                r.remind_at = now + timedelta(minutes=20) # Keep nagging
+        db.commit()
+    db.close()
 
 @bot.event
 async def on_ready():
-    # Force the status to Online
-    await bot.change_presence(status=discord.Status.online, activity=discord.Game(name="AI Reminders"))
-    print(f'---------------------------------------')
-    print(f'✅ SUCCESS: Bot is logged in as {bot.user}')
-    print(f'---------------------------------------')
+    check_reminders.start() # Start the nagging clock
+    print(f"✅ Bot Online: {bot.user}")
 
 @bot.event
 async def on_message(message):
-    if message.author == bot.user:
+    if message.author == bot.user or str(message.author.id) != os.getenv("ADMIN_ID"):
         return
 
-    if str(message.author.id) != str(ADMIN_ID):
-        return 
+    # Process AI Response
+    async with message.channel.typing():
+        response = get_ai_response(message.content, str(message.author.id))
+        await message.channel.send(response)
 
-    if message.content.startswith('!'):
-        await bot.process_commands(message)
-        return
-
-    # 4. Gemini AI Response (New way for google-genai)
-    try:
-        async with message.channel.typing():
-            # Use the client object to generate content
-            response = client.models.generate_content(
-                model="gemini-2.5-flash", 
-                contents=message.content
-            )
-            await message.channel.send(response.text)
-    except Exception as e:
-        await message.channel.send(f"❌ Gemini Error: {e}")
-
-@bot.command()
-async def status(ctx):
-    await ctx.send("🚀 System is online!")
-
-if __name__ == "__main__":
-    bot.run(TOKEN)
+bot.run(os.getenv("DISCORD_TOKEN"))

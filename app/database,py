@@ -1,15 +1,28 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Enum
+import os
+from sqlalchemy import create_engine, Column, Integer, String, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-import datetime
+from datetime import datetime
 
+DATABASE_URL = os.getenv("DATABASE_URL")
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
 
 class Reminder(Base):
-    __tablename__ = 'reminders'
+    __tablename__ = "reminders"
     id = Column(Integer, primary_key=True)
+    user_id = Column(String)
     task = Column(String)
     remind_at = Column(DateTime)
     status = Column(String, default="PENDING") # PENDING, NAGGING, COMPLETED
 
-# Setup database connection logic here
+class Timetable(Base):
+    __tablename__ = "timetable"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String)
+    day = Column(String)
+    subject = Column(String)
+    time = Column(String)
+
+Base.metadata.create_all(bind=engine)
