@@ -1,0 +1,19 @@
+version: "3.8"
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  bot:
+    image: wathsika/ai-reminder-bot:latest
+    env_file: .env
+    depends_on:
+      - db
+    restart: always
+volumes:
+  postgres_data:

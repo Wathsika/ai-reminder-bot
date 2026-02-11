@@ -1,0 +1,78 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  # STAGE 1: Build on GitHub and Push to Docker Hub
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/ai-reminder-bot:latest
+
+  # STAGE 2: Log into AWS and Pull the new image
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push # Only runs if Stage 1 finishes successfully!
+    steps:
+      - name: Deploy to AWS via SSH
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            # 1. Enter the project folder
+            cd ~/ai-reminder-bot || mkdir ~/ai-reminder-bot && cd ~/ai-reminder-bot
+
+            # 2. Re-create the .env file from secrets
+            echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
+            echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env
+            echo "ADMIN_ID=${{ secrets.ADMIN_ID }}" >> .env
+            echo "DB_USER=${{ secrets.DB_USER }}" >> .env
+            echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
+            echo "DB_NAME=${{ secrets.DB_NAME }}" >> .env
+            echo "DATABASE_URL=postgresql+psycopg2://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@db:5432/${{ secrets.DB_NAME }}" >> .env
+
+            # 3. Create a temporary docker-compose.yml on the server 
+            # (Since we aren't using Git pull on the server yet, we write it manually)
+            cat <<EOF > docker-compose.yml
+            services:
+              db:
+                image: postgres:15
+                environment:
+                  POSTGRES_USER: ${{ secrets.DB_USER }}
+                  POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
+                  POSTGRES_DB: ${{ secrets.DB_NAME }}
+                volumes:
+                  - postgres_data:/var/lib/postgresql/data
+              bot:
+                image: ${{ secrets.DOCKERHUB_USERNAME }}/ai-reminder-bot:latest
+                env_file: .env
+                depends_on:
+                  - db
+                restart: always
+            volumes:
+              postgres_data:
+            EOF
+
+            # 4. Pull the new image from Docker Hub
+            sudo docker compose pull
+
+            # 5. Start the containers
+            sudo docker compose up -d
