@@ -1,10 +1,11 @@
 import os
 from google import genai
-from google.genai import types # Added for tool configuration
+from google.genai import types
 from app.database import SessionLocal, Reminder, Timetable, ChatHistory
 from datetime import datetime
 import pytz
 
+# Initialize Gemini Client
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 # --- TOOLS GEMINI CAN USE ---
@@ -62,7 +63,7 @@ def get_reminders(user_id: str):
     finally:
         db.close()
 
-# --- LOGIC ---
+# --- AI LOGIC ---
 
 def get_ai_response(user_input: str, user_id: str):
     db = SessionLocal()
@@ -74,29 +75,42 @@ def get_ai_response(user_input: str, user_id: str):
         ChatHistory.user_id == user_id
     ).order_by(ChatHistory.timestamp.desc()).limit(10).all()
     
-    # Reverse them to get chronological order
+    # Reverse them to get oldest first (chronological order)
     history_records.reverse()
 
-    # 2. Format history for Gemini SDK
-    # Gemini expects: [{'role': 'user', 'parts': ['...']}, {'role': 'model', 'parts': ['...']}]
-    formatted_history = []
+    # 2. Construct the "contents" list using explicit SDK Types
+    # This prevents the "28 validation errors"
+    contents = []
+    
+    # Add historical messages
     for record in history_records:
-        formatted_history.append({"role": record.role, "parts": [record.content]})
+        contents.append(
+            types.Content(
+                role=record.role,
+                parts=[types.Part(text=record.content)]
+            )
+        )
+
+    # Add the current user message
+    contents.append(
+        types.Content(
+            role="user",
+            parts=[types.Part(text=user_input)]
+        )
+    )
 
     sys_msg = (
         f"Current Time: {now}. You are a proactive assistant. "
         f"The current user's ID is {user_id}. "
-        "Use tools to manage reminders. If the user says 'Remind it in X minutes', "
-        "look at the chat history to see what 'it' refers to (the last thing discussed)."
+        "Use tools to manage reminders. If the user refers to 'it', "
+        "check history to see what 'it' is (e.g., the last reminder sent)."
     )
 
-    # 3. Call Gemini with history + the new message
     try:
-        # Note: If you are using gemini-2.0, change the model name accordingly
-        # We use generate_content with the full history list
+        # 3. Call Gemini (Using valid model name: gemini-2.0-flash)
         response = client.models.generate_content(
-            model="gemini-2.5-flash", # Use a stable model name
-            contents=formatted_history + [{"role": "user", "parts": [user_input]}],
+            model="gemini-2.5-flash", 
+            contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=sys_msg,
                 tools=[add_reminder, add_timetable, complete_task, get_reminders],
@@ -104,19 +118,19 @@ def get_ai_response(user_input: str, user_id: str):
             )
         )
         
-        ai_text = response.text
+        # Ensure we have a string to return
+        ai_text = response.text if response.text else "Action completed."
 
-        # 4. Save this interaction to history
-        new_user_msg = ChatHistory(user_id=user_id, role="user", content=user_input)
-        new_ai_msg = ChatHistory(user_id=user_id, role="model", content=ai_text)
-        db.add(new_user_msg)
-        db.add(new_ai_msg)
+        # 4. Save this specific interaction to history
+        # We save the prompt and the final AI response
+        db.add(ChatHistory(user_id=user_id, role="user", content=user_input))
+        db.add(ChatHistory(user_id=user_id, role="model", content=ai_text))
         db.commit()
 
         return ai_text
 
     except Exception as e:
         print(f"AI Error: {e}")
-        return "Sorry, I'm having trouble thinking right now."
+        return "⚠️ Sorry, I had an error processing that message."
     finally:
         db.close()
