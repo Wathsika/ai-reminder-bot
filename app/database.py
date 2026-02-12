@@ -3,6 +3,7 @@ import time
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Index
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.exc import OperationalError
+from datetime import datetime
 
 # DATABASE_URL from .env
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -52,3 +53,11 @@ def init_db():
     
     print("❌ Could not connect to the database. Exiting.")
     raise SystemExit(1)
+
+class ChatHistory(Base):
+    __tablename__ = "chat_history"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, index=True)
+    role = Column(String)  # "user" or "model"
+    content = Column(String)
+    timestamp = Column(DateTime, default=datetime.utcnow)

@@ -1,7 +1,7 @@
 import os
 from google import genai
 from google.genai import types # Added for tool configuration
-from app.database import SessionLocal, Reminder, Timetable
+from app.database import SessionLocal, Reminder, Timetable, ChatHistory
 from datetime import datetime
 import pytz
 
@@ -65,28 +65,58 @@ def get_reminders(user_id: str):
 # --- LOGIC ---
 
 def get_ai_response(user_input: str, user_id: str):
-    # Set your timezone!
+    db = SessionLocal()
     tz = pytz.timezone('Asia/Colombo')
     now = datetime.now(tz).strftime("%Y-%m-%d %H:%M, %A")
     
+    # 1. Fetch last 10 messages from DB for context
+    history_records = db.query(ChatHistory).filter(
+        ChatHistory.user_id == user_id
+    ).order_by(ChatHistory.timestamp.desc()).limit(10).all()
+    
+    # Reverse them to get chronological order
+    history_records.reverse()
+
+    # 2. Format history for Gemini SDK
+    # Gemini expects: [{'role': 'user', 'parts': ['...']}, {'role': 'model', 'parts': ['...']}]
+    formatted_history = []
+    for record in history_records:
+        formatted_history.append({"role": record.role, "parts": [record.content]})
+
     sys_msg = (
         f"Current Time: {now}. You are a proactive assistant. "
         f"The current user's ID is {user_id}. "
-        "Use tools to manage reminders and timetables. "
-        "IMPORTANT: You already have the user's ID. NEVER ask the user for their ID. "
-        "If you detect a typo, correct it silently in the tool call. "
-        "When asked to remind, use 'add_reminder'. To see tasks, use 'get_reminders'."
+        "Use tools to manage reminders. If the user says 'Remind it in X minutes', "
+        "look at the chat history to see what 'it' refers to (the last thing discussed)."
     )
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash", 
-        contents=user_input,
-        config=types.GenerateContentConfig(
-            system_instruction=sys_msg,
-            tools=[add_reminder, add_timetable, complete_task, get_reminders],
-            # FIXED LINE BELOW:
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=False)
+    # 3. Call Gemini with history + the new message
+    try:
+        # Note: If you are using gemini-2.0, change the model name accordingly
+        # We use generate_content with the full history list
+        response = client.models.generate_content(
+            model="gemini-2.5-flash", # Use a stable model name
+            contents=formatted_history + [{"role": "user", "parts": [user_input]}],
+            config=types.GenerateContentConfig(
+                system_instruction=sys_msg,
+                tools=[add_reminder, add_timetable, complete_task, get_reminders],
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=False)
+            )
         )
-    )
-    
-    return response.text
+        
+        ai_text = response.text
+
+        # 4. Save this interaction to history
+        new_user_msg = ChatHistory(user_id=user_id, role="user", content=user_input)
+        new_ai_msg = ChatHistory(user_id=user_id, role="model", content=ai_text)
+        db.add(new_user_msg)
+        db.add(new_ai_msg)
+        db.commit()
+
+        return ai_text
+
+    except Exception as e:
+        print(f"AI Error: {e}")
+        return "Sorry, I'm having trouble thinking right now."
+    finally:
+        db.close()
