@@ -103,7 +103,7 @@ def get_ai_response(user_input: str, user_id: str):
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash", 
+            model="gemma-4-26b-a4b-it", 
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=sys_msg,
