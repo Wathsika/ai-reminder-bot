@@ -1,41 +1,42 @@
-# STAGE 1: Builder
+# Use a slim image for building
 FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-# Install build dependencies
+# Install build tools for psycopg2
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
-    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-# Install to a local folder to copy later
-RUN pip install --user --no-cache-dir -r requirements.txt
 
-# STAGE 2: Runner
+# Install dependencies globally in the builder stage
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+
+# FINAL STAGE
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install only the runtime library for Postgres
+# Install runtime library for Postgres
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy installed python packages from builder
-COPY --from=builder /root/.local /root/.local
+# Copy the installed libraries from the builder
+COPY --from=builder /install /usr/local
 COPY . .
 
-# Ensure scripts in .local/bin are in PATH
-ENV PATH=/root/.local/bin:$PATH
+# Environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-# Security: Non-root user
+# Create a non-root user and give them access to /app
 RUN adduser --disabled-password --gecos "" appuser && chown -R appuser /app
 USER appuser
 
+# Run the bot
 CMD ["python", "-m", "app.main"]
