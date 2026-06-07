@@ -1,31 +1,41 @@
-# 1. Use a slim Python image to keep the size small
-FROM python:3.11-slim
+# STAGE 1: Builder
+FROM python:3.11-slim AS builder
 
-# 2. Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-# 3. Set the working directory inside the container
 WORKDIR /app
 
-# 4. Install system dependencies
+# Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev \
     gcc \
+    libpq-dev \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 5. Install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install to a local folder to copy later
+RUN pip install --user --no-cache-dir -r requirements.txt
 
-# 6. Copy the rest of your application code
+# STAGE 2: Runner
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install only the runtime library for Postgres
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy installed python packages from builder
+COPY --from=builder /root/.local /root/.local
 COPY . .
 
-# 7. Security: Create a non-root user
+# Ensure scripts in .local/bin are in PATH
+ENV PATH=/root/.local/bin:$PATH
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+
+# Security: Non-root user
 RUN adduser --disabled-password --gecos "" appuser && chown -R appuser /app
 USER appuser
 
-# 8. Start the bot 
-# FIX: Use the -m flag and dot notation. 
-# This tells Python: "Run the main module inside the app package"
 CMD ["python", "-m", "app.main"]

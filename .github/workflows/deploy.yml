@@ -5,7 +5,6 @@ on:
     branches: [main]
 
 jobs:
-  # STAGE 1: Build on GitHub and Push to Docker Hub
   build-and-push:
     runs-on: ubuntu-latest
     steps:
@@ -23,56 +22,68 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/ai-reminder-bot:latest
+          # Note: Added tags for both 'latest' and the specific commit SHA for better tracking
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/ai-reminder-bot:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/ai-reminder-bot:${{ github.sha }}
 
-  # STAGE 2: Log into AWS and Pull the new image
   deploy:
     runs-on: ubuntu-latest
-    needs: build-and-push # Only runs if Stage 1 finishes successfully!
+    needs: build-and-push
     steps:
-      - name: Deploy to AWS via SSH
+      - name: Deploy to Oracle VPS via SSH
         uses: appleboy/ssh-action@v0.1.10
         with:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # 1. Enter the project folder
-            cd ~/ai-reminder-bot || mkdir ~/ai-reminder-bot && cd ~/ai-reminder-bot
+            mkdir -p ~/ai-reminder-bot && cd ~/ai-reminder-bot
 
-            # 2. Re-create the .env file from secrets
-            echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
-            echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env
-            echo "ADMIN_ID=${{ secrets.ADMIN_ID }}" >> .env
-            echo "DB_USER=${{ secrets.DB_USER }}" >> .env
-            echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
-            echo "DB_NAME=${{ secrets.DB_NAME }}" >> .env
-            echo "DATABASE_URL=postgresql+psycopg2://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@db:5432/${{ secrets.DB_NAME }}" >> .env
+            # Create .env file
+            cat <<EOF > .env
+            DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}
+            GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+            ADMIN_ID=${{ secrets.ADMIN_ID }}
+            DB_USER=${{ secrets.DB_USER }}
+            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+            DB_NAME=${{ secrets.DB_NAME }}
+            DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}
+            DATABASE_URL=postgresql+psycopg2://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@db:5432/${{ secrets.DB_NAME }}
+            EOF
 
-            # 3. Create a temporary docker-compose.yml on the server 
-            # (Since we aren't using Git pull on the server yet, we write it manually)
+            # Create docker-compose.yml
             cat <<EOF > docker-compose.yml
             services:
               db:
-                image: postgres:15
+                image: postgres:15-alpine
                 environment:
                   POSTGRES_USER: ${{ secrets.DB_USER }}
                   POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
                   POSTGRES_DB: ${{ secrets.DB_NAME }}
                 volumes:
                   - postgres_data:/var/lib/postgresql/data
+                deploy:
+                  resources:
+                    limits:
+                      memory: 256M
               bot:
                 image: ${{ secrets.DOCKERHUB_USERNAME }}/ai-reminder-bot:latest
                 env_file: .env
                 depends_on:
                   - db
                 restart: always
+                deploy:
+                  resources:
+                    limits:
+                      memory: 512M
             volumes:
               postgres_data:
             EOF
 
-            # 4. Pull the new image from Docker Hub
-            sudo docker compose pull
+            # Clean up old images to save disk space on VPS
+            sudo docker system prune -f
 
-            # 5. Start the containers
+            # Pull and Restart
+            sudo docker compose pull
             sudo docker compose up -d

@@ -1,22 +1,27 @@
 services:
   db:
-    image: postgres:15
+    image: postgres:15-alpine # Much smaller than standard postgres
     environment:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 256M # Oracle Free tier safe limit
 
   bot:
-    build: . # <--- THIS IS CRITICAL: It tells Docker to use your local Dockerfile
-    image: wathsika/ai-reminder-bot:latest
+    image: ${DOCKERHUB_USERNAME}/ai-reminder-bot:latest
     env_file: .env
-    environment:
-      - PYTHONPATH=/app # <--- THIS FIXES THE "ModuleNotFoundError"
     depends_on:
       - db
-    restart: unless-stopped
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
 volumes:
   postgres_data:
