@@ -79,11 +79,29 @@ async def check_reminders():
     finally:
         db.close()
 
+# --- CLEANUP LOOP ---
+@tasks.loop(hours=24)
+async def cleanup_db():
+    """Deletes chat history older than 30 days to prevent overstorage."""
+    cutoff = datetime.utcnow() - timedelta(days=30)
+    db = SessionLocal()
+    try:
+        deleted_count = db.query(ChatHistory).filter(ChatHistory.timestamp < cutoff).delete()
+        db.commit()
+        if deleted_count > 0:
+            print(f"🧹 Database Cleanup: Removed {deleted_count} old chat history records.")
+    except Exception as e:
+        print(f"Error during cleanup: {e}")
+    finally:
+        db.close()
+
 @bot.event
 async def on_ready():
     print(f"✅ Bot {bot.user} is live!")
     if not check_reminders.is_running():
         check_reminders.start()
+    if not cleanup_db.is_running():
+        cleanup_db.start()
 
 @bot.event
 async def on_message(message):
