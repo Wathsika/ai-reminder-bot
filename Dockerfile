@@ -20,9 +20,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install runtime library for Postgres
+# Install runtime library for Postgres and ffmpeg
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the installed libraries from the builder

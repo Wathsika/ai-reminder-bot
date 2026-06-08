@@ -1,6 +1,9 @@
 import os
 import discord
 import pytz
+import io
+import speech_recognition as sr
+from pydub import AudioSegment
 from discord.ext import commands, tasks
 # Added ChatHistory to imports
 from app.database import init_db, SessionLocal, Reminder, ChatHistory 
@@ -22,6 +25,31 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 ADMIN_ID = os.getenv("ADMIN_ID")
+
+def transcribe_audio(audio_bytes):
+    """Transcribes audio bytes in-memory using Google Speech Recognition."""
+    try:
+        # Load audio from bytes (Discord uses OGG/Opus for voice messages)
+        audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        
+        # Export to WAV in-memory
+        wav_io = io.BytesIO()
+        audio.export(wav_io, format="wav")
+        wav_io.seek(0)
+        
+        # Transcribe using SpeechRecognition
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_io) as source:
+            audio_data = recognizer.record(source)
+            text = recognizer.recognize_google(audio_data)
+            return text
+    except sr.UnknownValueError:
+        return "[Could not understand audio]"
+    except sr.RequestError as e:
+        return f"[Speech Recognition API error: {e}]"
+    except Exception as e:
+        print(f"Transcription error: {e}")
+        return "[Error processing audio]"
 
 @bot.command()
 async def reminders(ctx):
@@ -116,13 +144,29 @@ async def on_message(message):
         await bot.process_commands(message)
         return
 
+    user_input = message.content
+
+    # Handle Audio Attachments
+    if message.attachments:
+        for attachment in message.attachments:
+            if attachment.content_type and attachment.content_type.startswith("audio/"):
+                async with message.channel.typing():
+                    audio_bytes = await attachment.read()
+                    transcription = await bot.loop.run_in_executor(None, transcribe_audio, audio_bytes)
+                    if transcription:
+                        user_input = f"{user_input} [Audio Message]: {transcription}".strip()
+                break # Process only the first audio attachment for now
+
+    if not user_input:
+        return
+
     async with message.channel.typing():
         try:
             # get_ai_response now handles database history internally
             response = await bot.loop.run_in_executor(
                 None, 
                 get_ai_response, 
-                message.content, 
+                user_input, 
                 str(message.author.id)
             )
             if response:
